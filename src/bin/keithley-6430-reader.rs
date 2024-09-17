@@ -1,4 +1,4 @@
-use std::{path::PathBuf, fs::OpenOptions, io::Write, sync::{Mutex, Arc}, thread::spawn, time::Duration};
+use std::{fs::OpenOptions, io::Write, path::PathBuf, sync::{Arc, Mutex}, thread::spawn, time::Duration, vec};
 
 use chrono::Local;
 use clap::Parser;
@@ -6,10 +6,13 @@ use clap::Parser;
 use eframe::{egui, NativeOptions};
 use egui_plot::{Legend, Plot, PlotPoints, Points};
 
+const BOARD_NUM: i32 = 24; 
+
 extern "C" {
     fn ibdev(board: i32, pad: i32, sad: i32, timo: i32, send_eoi: i32, eosmode: i32) -> i32;
     // fn ibwrt(board: i32, buf: *const u8, cnt: i32) -> i32;
     fn ibrd(board: i32, buf: *mut u8, cnt: i32) -> i32;
+    fn ibwrt(board: i32, buf: *const u8, cnt: i32) -> i32;
 }
 
 #[derive(Parser, Debug)]
@@ -33,7 +36,10 @@ impl eframe::App for DisplayApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
 
-            let my_plot = Plot::new("I Plot").legend(Legend::default());
+            let my_plot = Plot::new("I Plot")
+                .legend(Legend::default())
+                .y_axis_formatter( |mark, _,| { format!("{:+e}", mark.value) })
+            ;
             let points = {
                 let data = self.buffer.lock().unwrap().clone();
                 data.into_iter().enumerate().map(|(idx, val)| {
@@ -77,10 +83,8 @@ fn main() {
                     .unwrap()
             };
             
-        
-            let mut asteriks = None;
-        
-
+            // let mut asteriks = None;
+    
             // pub const T10us: c_int = 1;
             // pub const T30us: c_int = 2;
             // pub const T100us: c_int = 3;
@@ -100,10 +104,16 @@ fn main() {
             // pub const T1000s: c_int = 17;
 
             let ud = unsafe {
-                ibdev(0, 22, 0, 15, 1, 0)
+                ibdev(0, BOARD_NUM, 0, 15, 1, 0)
             }; 
         
             loop {
+
+                let cmd = ":READ?";
+                unsafe {
+                    ibwrt(ud, cmd.as_ptr(), cmd.len() as i32);
+                }
+
                 let out = {
                     unsafe {
                         let mut buf = [0u8; 4096 * 20];
@@ -114,25 +124,27 @@ fn main() {
                 let out = String::from_utf8(out.to_vec()).unwrap();
                 let ans = out.trim_end_matches(char::from(0)).to_owned();
         
-                let ans = if let Some(ast) = &asteriks {
-                    format!("{ast}{ans}")
-                } else {
-                    ans
-                };
+                // let ans = if let Some(ast) = &asteriks {
+                //     format!("{ast}{ans}")
+                // } else {
+                //     ans
+                // };
                 
-                let cropped = !ans.ends_with("\r\n");
-                let mut parts = ans.split("\r\n")
-                    .filter(|part| !part.is_empty())
-                    .map(|part| part.trim())
-                    .collect::<Vec<_>>();
+                // let cropped = !ans.ends_with("\r\n");
+                // let mut parts = ans.split("\r\n")
+                //     .filter(|part| !part.is_empty())
+                //     .map(|part| part.trim())
+                //     .collect::<Vec<_>>();
+
+                let parts = vec![ans.split(',').collect::<Vec<_>>()[1]];
 
                 if !parts.is_empty() {
-                    if cropped {
-                        asteriks = Some((*parts.last().unwrap()).to_owned());
-                        parts.pop();
-                    } else {
-                        asteriks = None
-                    }
+                    // if cropped {
+                    //     asteriks = Some((*parts.last().unwrap()).to_owned());
+                    //     parts.pop();
+                    // } else {
+                    //     asteriks = None
+                    // }
             
                     if !parts.is_empty() {
                         let now = Local::now().naive_local();
