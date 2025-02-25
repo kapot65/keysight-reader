@@ -4,5 +4,10 @@
 			"path": "."
 		}
 	],
+	"extensions": {
+		"recommendations": [
+			"notsecret32.rust-extension-pack-vscode"
+		]
+	},
 	"settings": {}
 }

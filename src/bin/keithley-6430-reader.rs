@@ -154,14 +154,14 @@ fn main() {
                     }
             
                     for (idx, voltage) in parts.iter().enumerate() {
-                            data_file.write_all(voltage.as_bytes()).unwrap();
-                            data_file.write_all(b"\t").unwrap();
                         if idx == 0 {
                             let now: chrono::NaiveDateTime = Local::now().naive_local();
                             data_file.write_all(now.and_local_timezone(Local).unwrap().to_rfc3339().as_bytes()
                                 // now.format("%H:%M:%S").to_string().as_bytes()
                             ).unwrap();
                         }
+                        data_file.write_all(b"\t").unwrap();
+                        data_file.write_all(voltage.as_bytes()).unwrap();
                         data_file.write_all(b"\n").unwrap();
                     }
                     data_file.flush().unwrap();
