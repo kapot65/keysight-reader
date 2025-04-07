@@ -198,7 +198,7 @@ fn main() {
     }
 
     eframe::run_native(
-        "KeySight",
+        "Keithley 6430",
         NativeOptions::default(),
         Box::new(move |_| {
             Ok(Box::<DisplayApp>::new(DisplayApp { 
