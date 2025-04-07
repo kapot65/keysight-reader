@@ -75,7 +75,7 @@ fn main() {
         
                 let now = Local::now().naive_local();
         
-                let today_root = data_root.join(format!("{}", now.format("%d-%m-%y")));
+                let today_root = data_root.join(format!("{}", now.format("%y-%m-%d")));
         
                 std::fs::create_dir_all(&today_root).unwrap();
         
@@ -89,7 +89,7 @@ fn main() {
                 OpenOptions::new()
                     .append(true)
                     .create(true)
-                    .open(today_root.join(format!("{}.tsv", now.format("%H-%M"))))
+                    .open(current_file)
                     .unwrap()
             };
             
