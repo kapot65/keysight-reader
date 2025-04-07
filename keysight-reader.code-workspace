@@ -9,5 +9,9 @@
 			"notsecret32.rust-extension-pack-vscode"
 		]
 	},
-	"settings": {}
+	"settings": {
+		"rust-analyzer.cargo.features": [
+			"virtual"
+		]
+	}
 }

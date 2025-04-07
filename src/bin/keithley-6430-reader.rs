@@ -6,8 +6,10 @@ use clap::Parser;
 use eframe::{egui, NativeOptions};
 use egui_plot::{Legend, Plot, PlotPoints, Points};
 
+#[cfg(not(feature = "virtual"))]
 const BOARD_NUM: i32 = 24; 
 
+#[cfg(not(feature = "virtual"))]
 extern "C" {
     fn ibdev(board: i32, pad: i32, sad: i32, timo: i32, send_eoi: i32, eosmode: i32) -> i32;
     // fn ibwrt(board: i32, buf: *const u8, cnt: i32) -> i32;
@@ -26,8 +28,8 @@ struct Args {
 
 struct DisplayApp {
     buffer: Arc<Mutex<Vec<f32>>>,
-    n_to_plot: usize,
 }
+
 
 impl eframe::App for DisplayApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -56,11 +58,14 @@ impl eframe::App for DisplayApp {
 
 fn main() {
 
+    #[cfg(feature = "virtual")] {
+        println!("Running in virtual mode");
+    }
+
     let args = Args::parse();
 
     let buffer = Arc::new(Mutex::new(
         Vec::with_capacity(args.number_elements_to_plot * 2)));
-    let n_to_plot = args.number_elements_to_plot;
 
     {
         let buffer = Arc::clone(&buffer);
@@ -74,7 +79,12 @@ fn main() {
         
                 std::fs::create_dir_all(&today_root).unwrap();
         
+
+                #[cfg(feature = "virtual")]
+                let current_file = today_root.join(format!("{}-virtual.tsv", now.format("%H-%M")));
+                #[cfg(not(feature = "virtual"))]
                 let current_file = today_root.join(format!("{}.tsv", now.format("%H-%M")));
+
                 println!("writing to {current_file:?}");
                 OpenOptions::new()
                     .append(true)
@@ -103,48 +113,46 @@ fn main() {
             // pub const T300s: c_int = 16;
             // pub const T1000s: c_int = 17;
 
+            #[cfg(not(feature = "virtual"))]
             let ud = unsafe {
                 ibdev(0, BOARD_NUM, 0, 15, 1, 0)
-            }; 
-        
+            };
+
+            
             loop {
+                let parts = {
+                    #[cfg(not(feature = "virtual"))] {
+                        let cmd = ":READ?";
+                        unsafe {
+                            ibwrt(ud, cmd.as_ptr(), cmd.len() as i32);
+                        }
 
-                let cmd = ":READ?";
-                unsafe {
-                    ibwrt(ud, cmd.as_ptr(), cmd.len() as i32);
-                }
+                        let out = {
+                            unsafe {
+                                let mut buf = [0u8; 4096 * 20];
+                                ibrd(ud, buf.as_mut_ptr(), buf.len() as i32);
+                                buf
+                            }
+                        };
 
-                let out = {
-                    unsafe {
-                        let mut buf = [0u8; 4096 * 20];
-                        ibrd(ud, buf.as_mut_ptr(), buf.len() as i32);
-                        buf
-                    }
-                };
-                let out = String::from_utf8(out.to_vec()).unwrap();
-                let ans = out.trim_end_matches(char::from(0)).to_owned();
-        
-                // let ans = if let Some(ast) = &asteriks {
-                //     format!("{ast}{ans}")
-                // } else {
-                //     ans
-                // };
+                        let out = String::from_utf8(out.to_vec()).unwrap();
+                        let ans = out.trim_end_matches(char::from(0)).to_owned();
                 
-                // let cropped = !ans.ends_with("\r\n");
-                // let mut parts = ans.split("\r\n")
-                //     .filter(|part| !part.is_empty())
-                //     .map(|part| part.trim())
-                //     .collect::<Vec<_>>();
+                        let parts = ans.split(',').map(|part| part.to_string()).collect::<Vec<_>>();
+                        parts
+                    }
 
-                let parts = vec![ans.split(',').collect::<Vec<_>>()[1]];
+                    #[cfg(feature = "virtual")] {
+                        // wait 0.63 seconds
+                        std::thread::sleep(Duration::from_secs_f32(0.63)); // 1/1.6 seconds
+                        let generated_point = format!("{:+.6E}", rand::random_range(1e-13..3e-13));
+                        vec![generated_point]
+                    }
+
+                };
+
 
                 if !parts.is_empty() {
-                    // if cropped {
-                    //     asteriks = Some((*parts.last().unwrap()).to_owned());
-                    //     parts.pop();
-                    // } else {
-                    //     asteriks = None
-                    // }
             
                     if !parts.is_empty() {
                         let now = Local::now().naive_local();
@@ -156,8 +164,8 @@ fn main() {
                     for (idx, voltage) in parts.iter().enumerate() {
                         if idx == 0 {
                             let now: chrono::NaiveDateTime = Local::now().naive_local();
-                            data_file.write_all(now.and_local_timezone(Local).unwrap().to_rfc3339().as_bytes()
-                                // now.format("%H:%M:%S").to_string().as_bytes()
+                            data_file.write_all(
+                                now.and_local_timezone(Local).unwrap().to_rfc3339().as_bytes()
                             ).unwrap();
                         }
                         data_file.write_all(b"\t").unwrap();
@@ -194,8 +202,7 @@ fn main() {
         NativeOptions::default(),
         Box::new(move |_| {
             Ok(Box::<DisplayApp>::new(DisplayApp { 
-                buffer,
-                n_to_plot
+                buffer
             }))
         }),
     ).unwrap();
