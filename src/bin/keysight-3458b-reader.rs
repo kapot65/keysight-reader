@@ -22,8 +22,7 @@ struct Args {
 }
 
 struct DisplayApp {
-    buffer: Arc<Mutex<Vec<f32>>>,
-    n_to_plot: usize,
+    buffer: Arc<Mutex<Vec<f32>>>
 }
 
 impl eframe::App for DisplayApp {
@@ -54,7 +53,6 @@ fn main() {
 
     let buffer = Arc::new(Mutex::new(
         Vec::with_capacity(args.number_elements_to_plot * 2)));
-    let n_to_plot = args.number_elements_to_plot;
 
     {
         let buffer = Arc::clone(&buffer);
@@ -73,7 +71,7 @@ fn main() {
                 OpenOptions::new()
                     .append(true)
                     .create(true)
-                    .open(today_root.join(format!("{}.tsv", now.format("%H-%M"))))
+                    .open(current_file)
                     .unwrap()
             };
             
@@ -182,8 +180,7 @@ fn main() {
         NativeOptions::default(),
         Box::new(move |_| {
             Ok(Box::<DisplayApp>::new(DisplayApp { 
-                buffer,
-                n_to_plot
+                buffer
             }))
         }),
     ).unwrap();
