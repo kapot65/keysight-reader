@@ -131,7 +131,7 @@ fn service(buffer: Arc<Mutex<Option<Timeseries>>>, port: u16) {
                                 }
 
                                 write_df_message_sync(&mut socket, 
-                                    Reply::AcquirePoint { 
+                                    NumassMeta::Reply(Reply::AcquirePoint { 
                                         acquisition_time, 
                                         start_time, 
                                         end_time, 
@@ -139,7 +139,7 @@ fn service(buffer: Arc<Mutex<Option<Timeseries>>>, port: u16) {
                                         config: None, 
                                         zero_suppression: None, 
                                         status: numass::ReplyStatus::Ok 
-                                    },
+                                    }),
                                     Some(table.as_bytes().to_owned())
                                 ).expect("catch IO error on sending DF message");
                             }
