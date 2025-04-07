@@ -12,6 +12,7 @@
 	"settings": {
 		"rust-analyzer.cargo.features": [
 			"virtual"
-		]
+		],
+		"rust-analyzer.check.command": "clippy"
 	}
 }

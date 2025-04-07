@@ -13,6 +13,14 @@ egui_plot = "0.31.0"
 
 rand = { version = "0.9.0", optional = true }
 
+dataforge = { git = "https://github.com/kapot65/dataforge-parser-rust.git" }
+numass = { git = "https://github.com/kapot65/dataforge-parser-numass.git" }
+log = "0.4.27"
+env_logger = "0.11.8"
+
 
 [features]
 virtual =  ["rand"]
+
+[patch."https://github.com/kapot65/dataforge-parser-rust.git"]
+dataforge = { path = "../dataforge-parser-rust" }

@@ -1,10 +1,13 @@
-use std::{fs::OpenOptions, io::Write, path::PathBuf, sync::{Arc, Mutex}, thread::spawn, time::Duration, vec};
+use std::{fs::OpenOptions, io::Write, net::{SocketAddr, TcpListener}, path::PathBuf, sync::{atomic::{AtomicBool, Ordering}, Arc}, thread::{self, spawn}, time::Duration, vec};
 
-use chrono::Local;
+use chrono::{Local, NaiveDateTime};
 use clap::Parser;
 
-use eframe::{egui, NativeOptions};
+use dataforge::{read_df_message_sync, write_df_message_sync};
+use eframe::{egui::{self, mutex::Mutex}, NativeOptions};
 use egui_plot::{Legend, Plot, PlotPoints, Points};
+use log::{debug, error, info, warn};
+use numass::{NumassMeta, Reply};
 
 #[cfg(not(feature = "virtual"))]
 const BOARD_NUM: i32 = 24; 
@@ -24,6 +27,10 @@ struct Args {
     data_root: Option<PathBuf>,
     #[arg(short, long, default_value_t = 1000)]
     number_elements_to_plot: usize, 
+
+    /// A port for control acquision from online system.
+    #[arg(long, default_value_t = 8080)]
+    service_port: u16,
 }
 
 struct DisplayApp {
@@ -43,7 +50,7 @@ impl eframe::App for DisplayApp {
                 .y_axis_formatter( |mark, _,| { format!("{:+e}", mark.value) })
             ;
             let points = {
-                let data = self.buffer.lock().unwrap().clone();
+                let data = self.buffer.lock().clone();
                 data.into_iter().enumerate().map(|(idx, val)| {
                     [idx as f64, val as f64]
                 }).collect::<Vec<_>>()
@@ -56,19 +63,124 @@ impl eframe::App for DisplayApp {
     }
 }
 
+type Timeseries = Vec<(NaiveDateTime, String)>;
+
+fn service(buffer: Arc<Mutex<Option<Timeseries>>>, port: u16) {
+
+    let listener = TcpListener::bind(SocketAddr::new([0,0,0,0].into(), port)).unwrap();
+    info!("faradey-server works on 0.0.0.0:{}", port);
+
+    let mut current_running: Option<Arc<AtomicBool>> = None;
+
+    loop {
+        let (mut socket, _) = listener.accept().unwrap();
+
+        if current_running.is_some() {
+            info!("new connection. aborting previous one.");
+            if let Some(val) = current_running { val.store(false, Ordering::SeqCst) }
+        }
+        current_running = Some(Arc::new(AtomicBool::new(true)));
+
+        let running_local = Arc::clone(current_running.as_ref().unwrap());
+        let buffer = Arc::clone(&buffer);
+        thread::spawn(move || {
+            loop {
+                while running_local.load(Ordering::SeqCst) {
+                    let msg = read_df_message_sync(&mut socket).expect("catch IO error on receiving DF message");
+                    info!("received message: {msg:?}");
+
+                    match msg.meta {
+                        NumassMeta::Command(command) => match command {
+                            numass::Command::Init => {
+                                write_df_message_sync(
+                                    &mut socket,
+                                    NumassMeta::Reply(numass::Reply::Init {
+                                        status: numass::ReplyStatus::Ok,
+                                        reseted: false,
+                                    }),
+                                    None,
+                                )
+                                .expect("catch IO error on sending DF message");
+                            }
+                            numass::Command::AcquirePoint {
+                                split: _,
+                                acquisition_time,
+                                path: _,
+                                external_meta,
+                            } => {
+                                let start_time = Local::now().naive_local();
+                                {
+                                    let mut lock = buffer.lock();
+                                    *lock = Some(vec![]);
+                                }
+
+                                thread::sleep(Duration::from_secs_f32(acquisition_time));
+                                let data = buffer.lock().clone().unwrap();
+
+                                {
+                                    let mut lock = buffer.lock();
+                                    *lock = None;
+                                }
+                                let end_time = Local::now().naive_local();
+
+                                debug!("to online: {data:?}");
+
+                                let mut table = "timestamp\tvalue\n".to_string();
+                                for (timestamp, value) in data {
+                                    table.push_str(&format!("{}\t{}\n", timestamp.and_local_timezone(Local).unwrap().to_rfc3339(), value));
+                                }
+
+                                write_df_message_sync(&mut socket, 
+                                    Reply::AcquirePoint { 
+                                        acquisition_time, 
+                                        start_time, 
+                                        end_time, 
+                                        external_meta, 
+                                        config: None, 
+                                        zero_suppression: None, 
+                                        status: numass::ReplyStatus::Ok 
+                                    },
+                                    Some(table.as_bytes().to_owned())
+                                ).expect("catch IO error on sending DF message");
+                            }
+                        },
+                        _ => {
+                            write_df_message_sync(
+                                &mut socket,
+                                NumassMeta::Reply(numass::Reply::Error {
+                                    error_code: numass::ErrorType::UnknownMessageError,
+                                    description: "tqdc-server doesn't handles anything but commands"
+                                        .to_string(),
+                                }),
+                                None,
+                            )
+                            .expect("catch IO error on sending DF message");
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
 fn main() {
 
+    env_logger::init();
+
     #[cfg(feature = "virtual")] {
-        println!("Running in virtual mode");
+        warn!("Running in virtual mode");
     }
 
     let args = Args::parse();
 
-    let buffer = Arc::new(Mutex::new(
+    let plot_buffer = Arc::new(Mutex::new(
         Vec::with_capacity(args.number_elements_to_plot * 2)));
+    let point_buffer: Arc<Mutex<Option<Timeseries>>> = Arc::new(Mutex::new(None));
 
     {
-        let buffer = Arc::clone(&buffer);
+        let plot_buffer = Arc::clone(&plot_buffer);
+        let point_buffer = Arc::clone(&point_buffer);
+
         spawn(move || {
             let mut data_file = {
                 let data_root = args.data_root.unwrap_or(PathBuf::from("data"));
@@ -85,7 +197,7 @@ fn main() {
                 #[cfg(not(feature = "virtual"))]
                 let current_file = today_root.join(format!("{}.tsv", now.format("%H-%M")));
 
-                println!("writing to {current_file:?}");
+                info!("writing to {current_file:?}");
                 OpenOptions::new()
                     .append(true)
                     .create(true)
@@ -150,22 +262,19 @@ fn main() {
                     }
 
                 };
-
+                let timestamp = Local::now().naive_local();
 
                 if !parts.is_empty() {
-            
                     if !parts.is_empty() {
-                        let now = Local::now().naive_local();
-                        println!("{} {}", now.format("%H:%M:%S"), &parts.last().unwrap());
+                        debug!("{}", &parts.last().unwrap());
                     } else {
-                        println!("empty message after pop asterics")
+                        warn!("empty message after pop asterics")
                     }
             
                     for (idx, voltage) in parts.iter().enumerate() {
                         if idx == 0 {
-                            let now: chrono::NaiveDateTime = Local::now().naive_local();
                             data_file.write_all(
-                                now.and_local_timezone(Local).unwrap().to_rfc3339().as_bytes()
+                                timestamp.and_local_timezone(Local).unwrap().to_rfc3339().as_bytes()
                             ).unwrap();
                         }
                         data_file.write_all(b"\t").unwrap();
@@ -173,9 +282,18 @@ fn main() {
                         data_file.write_all(b"\n").unwrap();
                     }
                     data_file.flush().unwrap();
+
+                    // fill point data if acqusition is running (point_buffer != None)
+                    {
+                        if let Some(point_buffer) = point_buffer.lock().as_mut() {
+                            for raw_value in &parts {
+                                point_buffer.push((timestamp, raw_value.to_owned()));   
+                            }
+                        }
+                    }
     
                     {
-                        let mut buffer = buffer.lock().unwrap();
+                        let mut buffer = plot_buffer.lock();
                         let n_to_plot = args.number_elements_to_plot;
     
                         if buffer.len() > n_to_plot * 2 {
@@ -186,23 +304,30 @@ fn main() {
                             if let Ok(value) = raw_value.parse::<f32>() {
                                 buffer.push(value);
                             } else {
-                                println!("error parsing raw value: {raw_value:?}")
+                                error!("error parsing raw value: {raw_value:?}")
                             }
                         }
                     }
                 } else {
-                    println!("empty message")
+                    warn!("empty message")
                 }
             }
         });
     }
 
+    {
+        let point_buffer = Arc::clone(&point_buffer);
+        thread::spawn(move || {
+            service(point_buffer, args.service_port);
+        });
+    }
+    
     eframe::run_native(
         "Keithley 6430",
         NativeOptions::default(),
         Box::new(move |_| {
             Ok(Box::<DisplayApp>::new(DisplayApp { 
-                buffer
+                buffer: plot_buffer
             }))
         }),
     ).unwrap();

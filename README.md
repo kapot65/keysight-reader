@@ -4,6 +4,9 @@
 ## Virtual mode
 To run virtual mode either^
 - run cargo with `--features virtual`
+  ```shell
+  RUST_LOG=info cargo run --release --bin keithley-6430-reader --features virtual
+  ```
 - set virtual feature as default in `Cargo.toml`
   ```toml
   [features]
